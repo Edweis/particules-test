@@ -5,14 +5,37 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Sabby</title>
     <link rel="icon" href="./favicon.ico" type="image/x-icon">
+    <style>
+      body, html, canvas {
+        touch-action: none;
+        -webkit-touch-callout: none;
+        -webkit-user-select: none;
+        -khtml-user-select: none;
+        -moz-user-select: none;
+        -ms-user-select: none;
+        user-select: none;
+        outline: none;
+      }
+    </style>
   </head>
-  <body style="margin: 0; width: 100vw; height: 100vh; background: black;">
+  <body style="margin: 0; width: 100vw; height: 100vh; background: black; pointer-events:none;overflow: hidden;user-select: none;">
         <canvas style="display: block;" id="renderMan" ></canvas>
 	<script>
+    function getQueryParam(paramName, urlString = window.location.href) {
+    // Create a URL object
+    var url = new URL(urlString);
+
+    // Get the search params from the URL
+    var searchParams = url.searchParams;
+
+    // Return the value of the specified parameter
+    return searchParams.get(paramName);
+}
         const SIGNAL_RUN = 0;
         const SIGNAL_PAUSE = 1;
         const SIGNAL_READY = 2;
-        const PARTICLE_COUNT = 1_000_000;
+        const PARTICLE_COUNT = ~~getQueryParam('count') || 1_000_000;
+        // const PARTICLE_COUNT = 10_000_000;
         const CPU_CORES = navigator.hardwareConcurrency;
         const chunkSize = Math.floor(PARTICLE_COUNT/CPU_CORES);
         const workerPool = [];
@@ -23,7 +46,7 @@
         const sabSignals = new SharedArrayBuffer(CPU_CORES);
         const sabViewSignals = new Uint8Array(sabSignals);
         // dt + mouse x and mouse y
-        const sabSimData = new SharedArrayBuffer(4+4+4);
+        const sabSimData = new SharedArrayBuffer(4+4+4+4);
         const sabViewSimData = new Float32Array(sabSimData);
         const canvas = document.getElementById('renderMan');
         const context = canvas.getContext('2d');
@@ -40,6 +63,29 @@
         window.addEventListener('mousemove', e => {
           sabViewSimData[1] = e.clientX;
           sabViewSimData[2] = e.clientY;
+        });
+        window.addEventListener('mousedown', e => {
+          sabViewSimData[3] = 1;
+        });
+        window.addEventListener('mouseup', e => {
+          sabViewSimData[3] = 0;
+        });
+        window.addEventListener('touchmove', e => {
+          const touch = e.touches[0];
+          sabViewSimData[1] = touch.clientX || touch.pageX;
+          sabViewSimData[2] = touch.clientY || touch.pageY;
+        });
+        window.addEventListener('touchstart', e => {
+          const touch = e.touches[0];
+          sabViewSimData[1] = touch.clientX || touch.pageX;
+          sabViewSimData[2] = touch.clientY || touch.pageY;
+          sabViewSimData[3] = 1;
+        });
+        window.addEventListener('touchend', () => {
+          sabViewSimData[3] = 0;
+        });
+        window.addEventListener('touchcancel', () => {
+          sabViewSimData[3] = 0;
         });
 
         //setup workers
@@ -84,17 +130,22 @@
       function render() {
         const width = canvas.width;
         const height = canvas.height;
-        backbuffer.data.fill(0);
+        const pixels = backbuffer.data;
+        pixels.fill(0);
+
         for (let i = 0; i < PARTICLE_COUNT; i++) {
           const x = sabViewParticles[i * 4];
           if (x < 0 || x >= width) continue;
           const y = sabViewParticles[i * 4 + 1];
           if (y < 0 || y >= height) continue;
           const pixelIndex = ((y | 0) * width + (x | 0)) * 4;
-            backbuffer.data[pixelIndex] += 30;   // Red channel
-            backbuffer.data[pixelIndex + 1] += 40; // Green channel
-            backbuffer.data[pixelIndex + 2] += 65; // Blue channel
-            backbuffer.data[pixelIndex + 3] = 255; // Alpha channel (opacity)
+          const rx = x / width;
+          const ry = y / height;
+          pixels[pixelIndex] += 25 + (50*rx);   // Red channel
+          pixels[pixelIndex + 1] += 25 +(50*ry); // Green channel
+          pixels[pixelIndex + 2] += 25 +(50*(1-rx)); // Blue channel
+          // pixels[pixelIndex + 2] = 200;
+          pixels[pixelIndex + 3] = 255; // Alpha channel (opacity)
         }
 
         context.putImageData(backbuffer, 0, 0);
