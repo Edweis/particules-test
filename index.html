@@ -5,18 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Sabby</title>
     <link rel="icon" href="./favicon.ico" type="image/x-icon">
-    <style>
-      body, html, canvas {
-        touch-action: none;
-        -webkit-touch-callout: none;
-        -webkit-user-select: none;
-        -khtml-user-select: none;
-        -moz-user-select: none;
-        -ms-user-select: none;
-        user-select: none;
-        outline: none;
-      }
-    </style>
   </head>
   <body style="margin: 0; width: 100vw; height: 100vh; background: black; pointer-events:none;overflow: hidden;user-select: none;">
         <canvas style="display: block;" id="renderMan" ></canvas>
@@ -26,38 +14,38 @@
         const SIGNAL_READY = 1;
         const SIGNAL_RUN = 2;
         const PARTICLE_COUNT = ~~getQueryParam('count') || 2_000_000;
-        // const PARTICLE_COUNT = 10_000_000;
         const WORKER_COUNT = navigator.hardwareConcurrency - 1;
-        const chunkSize = Math.floor(PARTICLE_COUNT / WORKER_COUNT);
+        const WORKER_CHUNK_SIZE = Math.floor(PARTICLE_COUNT / WORKER_COUNT);
         const workerPool = [];
         let activeWorkers = 0;
-        const stride = 4; // 4 floats x,y,dx,dy;
-        const byte_stride = stride*4; // 4 bytes per float
-        const sabParticles = new SharedArrayBuffer(PARTICLE_COUNT * byte_stride);
-        const sabViewParticles = new Float32Array(sabParticles);
-        // dt + mouse x + mouse y + touch down + screen with + screen height
-        const sabSimData = new SharedArrayBuffer(4+4+4+4+4+4);
-        const sabViewSimData = new Float32Array(sabSimData);
+        
         const canvas = document.getElementById('renderMan');
         const context = canvas.getContext('2d');
-        let sabPixelBuffs = new SharedArrayBuffer(WORKER_COUNT*window.innerWidth*window.innerHeight*3);
-        let sabViewPixelBuffs = new Uint8Array(sabPixelBuffs);
+        let width = window.innerWidth;
+        let height = window.innerHeight;
         let backbuffer = new ImageData(window.innerWidth, window.innerHeight);
+        let sabViewPixelsA, sabViewPixelsB, activePixelBuff;
+
+        const particleStride = 4; // 4 floats x,y,dx,dy;
+        const particleByteStride = particleStride*4; // 4 bytes per float
+        const sabViewParticles = new Float32Array(new SharedArrayBuffer(PARTICLE_COUNT * particleByteStride));
+        // dt + mouse x + mouse y + touch down + screen with + screen height
+        const sabViewSimData = new Float32Array(new SharedArrayBuffer(4+4+4+4+4+4));
+
         
         // windowing init
-        canvas.width = window.innerWidth;
-        canvas.height = window.innerHeight;
-        sabViewSimData[4] = canvas.width;
-        sabViewSimData[5] = canvas.height;
-        window.addEventListener('resize', () => {
+        function resize() {
           canvas.width = window.innerWidth;
           canvas.height = window.innerHeight;
-          sabPixelBuffs = new SharedArrayBuffer(WORKER_COUNT*canvas.width*canvas.height*3);
-          sabViewPixelBuffs = new Uint8Array(sabPixelBuffs);
-          backbuffer = new ImageData(canvas.width, canvas.height);
           sabViewSimData[4] = canvas.width;
           sabViewSimData[5] = canvas.height;
-        });
+          backbuffer = new ImageData(canvas.width, canvas.height);
+          sabViewPixelsA = new Uint32Array(new SharedArrayBuffer(width*height*4*WORKER_COUNT));
+          sabViewPixelsB = new Uint32Array(new SharedArrayBuffer(width*height*4*WORKER_COUNT));
+          activePixelBuff = sabViewPixelsB;
+        }
+        resize();
+        window.addEventListener('resize', resize);
         window.addEventListener('mousemove', e => {
           sabViewSimData[1] = e.clientX;
           sabViewSimData[2] = e.clientY;
@@ -93,25 +81,29 @@
           worker.addEventListener('message', onWorkerMessage);
           workerPool.push(worker);
           worker.postMessage({
-            sabParticles, id: i, chunkSize, chunkOffset: chunkSize*i, stride, sabSimData, sabPixelBuffs
+            id: i,
+            sabViewParticles,
+            sabViewSimData,
+            particleOffsetStart: WORKER_CHUNK_SIZE*i,
+            particleOffsetEnd:  WORKER_CHUNK_SIZE*i + WORKER_CHUNK_SIZE,
+            particleStride,
           });
         }
 
-        //init particles
-        for(let i = 0;i < PARTICLE_COUNT;i++) {
-          sabViewParticles[i*stride] = Math.random() * canvas.width;
-          sabViewParticles[i*stride+1] = Math.random() * canvas.height;
-          sabViewParticles[i*stride+2] = (Math.random()*2-1)*10;
-          sabViewParticles[i*stride+3] = (Math.random()*2-1)*10;
-        }
+      //init particles
+      for(let i = 0;i < PARTICLE_COUNT;i++) {
+        sabViewParticles[i*particleStride] = Math.random() * canvas.width;
+        sabViewParticles[i*particleStride+1] = Math.random() * canvas.height;
+        sabViewParticles[i*particleStride+2] = (Math.random()*2-1)*30;
+        sabViewParticles[i*particleStride+3] = (Math.random()*2-1)*30;
+      }
 
-      console.log('workers loading...');
       function onWorkerMessage() {
         activeWorkers--;
         if (activeWorkers !== 0) {
           return;
         }
-        render();
+
         requestAnimationFrame(runSimulation);
       };
 
@@ -122,21 +114,31 @@
         sabViewSimData[0] = dt;
         activeWorkers = WORKER_COUNT;
         workerPool.forEach((worker, i) => {
-          worker.postMessage({}); 
+          worker.postMessage({
+            sabViewPixels: activePixelBuff,
+          });
         });
+        activePixelBuff = activePixelBuff === sabViewPixelsA ? sabViewPixelsB : sabViewPixelsA;
+        render(activePixelBuff);
       }
 
-      function render() {
+      function render(pixelBuff) {
         const width = canvas.width;
         const height = canvas.height;
         const pixels = backbuffer.data;
-        const pixStride = width*height*3;
+
         for (let i = 0; i < width*height;i++) {
           let r = 0, g = 0, b = 0;
           for (let j = 0;j < WORKER_COUNT;j++) {
-            r += sabViewPixelBuffs[j*pixStride + i*3];
-            g += sabViewPixelBuffs[j*pixStride + i*3 + 1];
-            b += sabViewPixelBuffs[j*pixStride + i*3 + 2];
+            // const offset = j*width*height*3;
+            // r += pixelBuff[offset + i*3];
+            // g += pixelBuff[offset + i*3 + 1];
+            // b += pixelBuff[offset + i*3 + 2];
+            const offset = j*width*height;
+            const col = pixelBuff[offset + i];
+            r += (col >> 16) & 0xFF;
+            g += (col >> 8) & 0xFF;
+            b += col & 0xFF;
           }
           pixels[i*4] = r;
           pixels[i*4+1] = g;
