@@ -5,6 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Sabby</title>
     <link rel="icon" href="./favicon.ico" type="image/x-icon">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/UAParser.js/1.0.37/ua-parser.min.js"></script>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.162.0/build/three.module.js"
+        }
+      }
+    </script>
     <style>
       body, html, canvas {
         touch-action: none;
@@ -19,68 +27,58 @@
     </style>
   </head>
   <body style="margin: 0; width: 100vw; height: 100vh; background: black; pointer-events:none;overflow: hidden;user-select: none;">
-        <canvas style="display: block;" id="renderMan" ></canvas>
-	<script>
+	<script type="module">
+        import * as THREE from 'three';
+        const uap = new UAParser();
+
         const getQueryParam = (paramName) => new URL(window.location.href).searchParams.get(paramName);
         const PARTICLE_COUNT = ~~getQueryParam('count') || 1_000_000;
-        const WORKER_COUNT = navigator.hardwareConcurrency - 1;
+        const WORKER_COUNT = uap.getResult().device.vendor === 'Apple' ? 4 : navigator.hardwareConcurrency - 1;
         const WORKER_CHUNK_SIZE = Math.floor(PARTICLE_COUNT / WORKER_COUNT);
         const workerPool = [];
         let activeWorkers = 0;
-        
-        const canvas = document.getElementById('renderMan');
-        const context = canvas.getContext('2d');
         let width = window.innerWidth;
         let height = window.innerHeight;
-        let backbuffer = new ImageData(window.innerWidth, window.innerHeight);
-        let particleGridA, particleGridB, activeParticleGrid;
 
-        const particleStride = 6; // 4 floats x,y,dx,dy,sx,sy;
+        const particleStride = 6; // 6 floats x,y,dx,dy,sx,sy;
         const particleByteStride = particleStride*4; // 4 bytes per float
         const sabViewParticles = new Float32Array(new SharedArrayBuffer(PARTICLE_COUNT * particleByteStride));
         // dt + screen width + screen height + touch count + mouse x + mouse y 
         const sabViewSimData = new Float32Array(new SharedArrayBuffer(4*64));
 
+        let particleGridA, particleGridB, activeParticleGrid;
         
-        // windowing init
-       // windowing init
-       function resize() {
-          canvas.width = window.innerWidth;
-          canvas.height = window.innerHeight;
-          sabViewSimData[1] = canvas.width;
-          sabViewSimData[2] = canvas.height;
-          backbuffer = new ImageData(canvas.width, canvas.height);
+        const scene = new THREE.Scene();
+        const camera = new THREE.OrthographicCamera(width / -2, width / 2, height / 2, height / -2, 0.1, 100);
+        camera.position.set(width/2, height/2, 1);
+        const renderer = new THREE.WebGLRenderer();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+        
+        function resize() {
+          width = window.innerWidth;
+          height = window.innerHeight;
+          // material.uniforms.resolution.value.set(width, height);
+          sabViewSimData[1] = width;
+          sabViewSimData[2] = height;
+          renderer.setSize(width, height);
+          camera.position.set(width/2, height/2, 10);
+          camera.left = width / -2;
+          camera.right = width / 2;
+          camera.top = height / 2;
+          camera.bottom = height / -2;
+          camera.updateProjectionMatrix();
+
           particleGridA = new Uint8Array(new SharedArrayBuffer(width*height));
           particleGridB = new Uint8Array(new SharedArrayBuffer(width*height));
           activeParticleGrid = particleGridA;
-          for(let i = 0;i<PARTICLE_COUNT;i++) {
-            sabViewParticles[i*particleStride] = Math.random() * width;
-            sabViewParticles[i*particleStride+1] = Math.random() * height;
-            sabViewParticles[i*particleStride+2] = (Math.random()*2-1)*30;
-            sabViewParticles[i*particleStride+3] = (Math.random()*2-1)*30;
-            sabViewParticles[i*particleStride+4] = sabViewParticles[i*particleStride];
-            sabViewParticles[i*particleStride+5] = sabViewParticles[i*particleStride+1];
-          }
-          if (workerPool.length <= 0) return;
-          for(let i = 0;i< WORKER_COUNT;i++) {
-            const worker = workerPool[i];
-            worker.postMessage({
-              id: i,
-              sabViewParticles,
-              sabViewSimData,
-              particleOffsetStart: WORKER_CHUNK_SIZE*i,
-              particleOffsetEnd:  WORKER_CHUNK_SIZE*i + WORKER_CHUNK_SIZE,
-              particleStride,
-              particleGridA,
-              particleGridB
-            });
-          }
         }
         resize();
+
         window.addEventListener('resize', resize);
         window.addEventListener('mousemove', e => {
           sabViewSimData[4] = e.clientX;
-          sabViewSimData[5] = e.clientY;
+          sabViewSimData[5] = height - e.clientY;
         });
         window.addEventListener('mousedown', e => {
           sabViewSimData[3] = 1;
@@ -94,7 +92,7 @@
           for(let i = 0;i < e.targetTouches.length;i++) {
             const touch = e.targetTouches[i];
             sabViewSimData[i*2+4] = touch.clientX;
-            sabViewSimData[i*2+4+1] = touch.clientY;
+            sabViewSimData[i*2+4+1] = height - touch.clientY;
           }
         });
         window.addEventListener('touchstart', e => {
@@ -148,10 +146,9 @@
         if (activeWorkers !== 0) {
           return;
         }
-
         requestAnimationFrame(runSimulation);
       };
-
+      
       let lastTime = 1;
       function runSimulation(currentTime) {
         const dt = Math.min(0.1, (currentTime - lastTime) / 1000);
@@ -165,25 +162,54 @@
         render(activeParticleGrid);
       }
 
-      function render(grid) {
-        const width = canvas.width;
-        const height = canvas.height;
-        const pixels = backbuffer.data;
-        pixels.fill(0);
-        for (let i = 0; i < width * height; i++) {
-          const particleCount = grid[i];
-          const y = Math.floor(i / width);
-          const x = i % width;
-          const rx = x / width;
-          const ry = y / height;
-          pixels[i * 4] = (25 + 35 * rx)*particleCount;
-          pixels[i * 4 + 1] = (25 + 35 * ry)*particleCount;
-          pixels[i * 4 + 2] = (25 + 35 * (1-ry))*particleCount;
-          pixels[i * 4 + 3] = 255;
-        }
-        grid.fill(0);
+      let texture = new THREE.DataTexture(new Uint8Array(width*height), width, height, THREE.RedFormat, THREE.UnsignedByteType, THREE.UVMapping, THREE.ClampToEdge, THREE.ClampToEdge, THREE.NearestFilter, THREE.NearestFilter, 0);
+      const customMaterial = new THREE.ShaderMaterial({
+          uniforms: {
+            screen: { value: new THREE.Vector2(width, height) },
+            uTexture: { value: texture }
+          },
+          vertexShader: `
+              varying vec2 vUv;
+              
+              void main() {
+                vUv = uv;
+                gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+              }
+          `,
+          fragmentShader: `
+              uniform sampler2D uTexture;
+              uniform vec2 screen;
+              varying vec2 vUv;
 
-        context.putImageData(backbuffer, 0, 0);
+              void main() {
+                float count = texture2D(uTexture, vUv).x;
+                vec4 col = vec4(0,0,0,1);
+                col.x = count * (5. + 20.*gl_FragCoord.x / screen.x);
+                col.y = count * (5. + 20.*gl_FragCoord.y / screen.y);
+                col.z = count * (5. + 20.*(1.-gl_FragCoord.y / screen.y));
+                gl_FragColor = col;
+              }
+          `,
+          blending: THREE.AdditiveBlending,
+					depthTest: false,
+      });
+
+      const geometry = new THREE.PlaneGeometry(width, height);
+      const quad = new THREE.Mesh(geometry, customMaterial);
+      quad.position.set(width/2,height/2,0);
+      scene.add(quad);
+
+      function render(grid) {
+        // const attrArray = geometry.getAttribute('position').array;
+        // for(let i = 0; i < PARTICLE_COUNT;i++) {
+        //   attrArray[i*2] = sabViewParticles[i*particleStride];
+        //   attrArray[i*2+1] = sabViewParticles[i*particleStride+1];
+        // }
+        // geometry.getAttribute('position').needsUpdate = true;
+        texture.image.data.set(grid);
+        texture.needsUpdate = true;
+        renderer.render(scene, camera);
+        grid.fill(0);
       }
     </script>
   </body>

@@ -46,7 +46,7 @@ const simulate = (event) => {
       for (let t = 0; t < touchCount; t++) {
         const tx = sabViewSimData[4 + t * 2];
         const ty = sabViewSimData[4 + t * 2 + 1];
-        forceInvSqr(tx, ty, x, y, 2583000);
+        forceInvSqr(tx, ty, x, y, 2583000 * 15);
         dx += cacher.x * delta * 3;
         dy += cacher.y * delta * 3;
       }
