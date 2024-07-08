@@ -1,10 +1,17 @@
-const SIGNAL_RUN = 0;
-const SIGNAL_PAUSE = 1;
-const SIGNAL_READY = 2;
+const SIGNAL_PAUSE = 0;
+const SIGNAL_READY = 1;
+const SIGNAL_RUN = 2;
 
 console.log("worker created");
 
+let simulate = null;
+
 onmessage = (event) => {
+  if (!(event.data?.id >= 0) && simulate) {
+    simulate();
+    return;
+  }
+
   const {
     sabParticles,
     sabSignals,
@@ -15,10 +22,11 @@ onmessage = (event) => {
     chunkOffset,
     stride,
   } = event.data;
+
   const particlesView = new Float32Array(sabParticles);
-  const signalsView = new Uint8Array(sabSignals);
+  const signalsView = new Int32Array(sabSignals);
   const simDataView = new Float32Array(sabSimData);
-  const pixelBuffs = new Uint8Array(sabPixelBuffs);
+  const pixelBuffs = new Uint8ClampedArray(sabPixelBuffs);
   const dt = () => simDataView[0];
   const input = () => [
     simDataView[1],
@@ -27,11 +35,10 @@ onmessage = (event) => {
     simDataView[4],
     simDataView[5],
   ];
-  signalsView[id] = SIGNAL_READY;
   console.log(`worker init ${id}`);
+  self.postMessage({ id: SIGNAL_READY });
 
-  setInterval(() => {
-    if (signalsView[id] !== SIGNAL_RUN) return;
+  simulate = () => {
     const delta = dt();
     const [mx, my, isTouch, width, height] = input();
     const buffStride = width * height * 3;
@@ -70,6 +77,7 @@ onmessage = (event) => {
       pixelBuffs[buffStride * id + pixelIndex + 1] += 25 + 50 * ry;
       pixelBuffs[buffStride * id + pixelIndex + 2] += 25 + 50 * (1 - rx);
     }
-    signalsView[id] = SIGNAL_READY;
-  }, 1);
+
+    self.postMessage({ id: SIGNAL_READY });
+  };
 };
