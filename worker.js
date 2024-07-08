@@ -46,15 +46,11 @@ const simulate = (event) => {
       for (let t = 0; t < touchCount; t++) {
         const tx = sabViewSimData[4 + t * 2];
         const ty = sabViewSimData[4 + t * 2 + 1];
-        forceInvSqr(tx, ty, x, y, 2583000);
-        dx += cacher.x * delta * 3;
-        dy += cacher.y * delta * 3;
+        gravity(tx, ty, x, y, 2_583_000);
+        dx += cacher.x * delta * 1;
+        dy += cacher.y * delta * 1;
       }
     }
-
-    forceSqr(sx, sy, x, y, 0.5);
-    dx += cacher.x * delta * 1;
-    dy += cacher.y * delta * 1;
 
     x += dx * delta;
     y += dy * delta;
@@ -77,13 +73,13 @@ function clamp(n) {
   return n | ((255 - n) >> 31);
 }
 
-function forceInvSqr(x1, y1, x2, y2, m = 25830000) {
+function gravity(x1, y1, x2, y2, m = 25830000 ) {
   const dx = x1 - x2;
   const dy = y1 - y2;
   const dist = Math.sqrt(dx * dx + dy * dy);
+  const force = Math.min(1200, m / (dist * dist));
   const dirX = dx / dist;
   const dirY = dy / dist;
-  const force = Math.min(1200, m / (dist * dist));
   cacher.x = force * dirX;
   cacher.y = force * dirY;
 }
