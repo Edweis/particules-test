@@ -1,19 +1,28 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" style="user-select: none;">
   <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Sabby</title>
     <link rel="icon" href="./favicon.ico" type="image/x-icon">
+    <style>
+      body, html, canvas {
+        touch-action: none;
+        -webkit-touch-callout: none;
+        -webkit-user-select: none;
+        -khtml-user-select: none;
+        -moz-user-select: none;
+        -ms-user-select: none;
+        user-select: none;
+        outline: none;
+      }
+    </style>
   </head>
   <body style="margin: 0; width: 100vw; height: 100vh; background: black; pointer-events:none;overflow: hidden;user-select: none;">
         <canvas style="display: block;" id="renderMan" ></canvas>
 	<script>
         const getQueryParam = (paramName) => new URL(window.location.href).searchParams.get(paramName);
-        const SIGNAL_PAUSE = 0;
-        const SIGNAL_READY = 1;
-        const SIGNAL_RUN = 2;
-        const PARTICLE_COUNT = ~~getQueryParam('count') || 2_000_000;
+        const PARTICLE_COUNT = ~~getQueryParam('count') || 1_000_000;
         const WORKER_COUNT = navigator.hardwareConcurrency - 1;
         const WORKER_CHUNK_SIZE = Math.floor(PARTICLE_COUNT / WORKER_COUNT);
         const workerPool = [];
@@ -24,31 +33,54 @@
         let width = window.innerWidth;
         let height = window.innerHeight;
         let backbuffer = new ImageData(window.innerWidth, window.innerHeight);
-        let sabViewPixelsA, sabViewPixelsB, activePixelBuff;
+        let particleGridA, particleGridB, activeParticleGrid;
 
-        const particleStride = 4; // 4 floats x,y,dx,dy;
+        const particleStride = 6; // 4 floats x,y,dx,dy,sx,sy;
         const particleByteStride = particleStride*4; // 4 bytes per float
         const sabViewParticles = new Float32Array(new SharedArrayBuffer(PARTICLE_COUNT * particleByteStride));
-        // dt + mouse x + mouse y + touch down + screen with + screen height
-        const sabViewSimData = new Float32Array(new SharedArrayBuffer(4+4+4+4+4+4));
+        // dt + screen width + screen height + touch count + mouse x + mouse y 
+        const sabViewSimData = new Float32Array(new SharedArrayBuffer(4*64));
 
         
         // windowing init
-        function resize() {
+       // windowing init
+       function resize() {
           canvas.width = window.innerWidth;
           canvas.height = window.innerHeight;
-          sabViewSimData[4] = canvas.width;
-          sabViewSimData[5] = canvas.height;
+          sabViewSimData[1] = canvas.width;
+          sabViewSimData[2] = canvas.height;
           backbuffer = new ImageData(canvas.width, canvas.height);
-          sabViewPixelsA = new Uint32Array(new SharedArrayBuffer(width*height*4*WORKER_COUNT));
-          sabViewPixelsB = new Uint32Array(new SharedArrayBuffer(width*height*4*WORKER_COUNT));
-          activePixelBuff = sabViewPixelsB;
+          particleGridA = new Uint8Array(new SharedArrayBuffer(width*height));
+          particleGridB = new Uint8Array(new SharedArrayBuffer(width*height));
+          activeParticleGrid = particleGridA;
+          for(let i = 0;i<PARTICLE_COUNT;i++) {
+            sabViewParticles[i*particleStride] = Math.random() * width;
+            sabViewParticles[i*particleStride+1] = Math.random() * height;
+            sabViewParticles[i*particleStride+2] = (Math.random()*2-1)*30;
+            sabViewParticles[i*particleStride+3] = (Math.random()*2-1)*30;
+            sabViewParticles[i*particleStride+4] = sabViewParticles[i*particleStride];
+            sabViewParticles[i*particleStride+5] = sabViewParticles[i*particleStride+1];
+          }
+          if (workerPool.length <= 0) return;
+          for(let i = 0;i< WORKER_COUNT;i++) {
+            const worker = workerPool[i];
+            worker.postMessage({
+              id: i,
+              sabViewParticles,
+              sabViewSimData,
+              particleOffsetStart: WORKER_CHUNK_SIZE*i,
+              particleOffsetEnd:  WORKER_CHUNK_SIZE*i + WORKER_CHUNK_SIZE,
+              particleStride,
+              particleGridA,
+              particleGridB
+            });
+          }
         }
         resize();
         window.addEventListener('resize', resize);
         window.addEventListener('mousemove', e => {
-          sabViewSimData[1] = e.clientX;
-          sabViewSimData[2] = e.clientY;
+          sabViewSimData[4] = e.clientX;
+          sabViewSimData[5] = e.clientY;
         });
         window.addEventListener('mousedown', e => {
           sabViewSimData[3] = 1;
@@ -57,20 +89,29 @@
           sabViewSimData[3] = 0;
         });
         window.addEventListener('touchmove', e => {
-          const touch = e.touches[0];
-          sabViewSimData[1] = touch.clientX || touch.pageX;
-          sabViewSimData[2] = touch.clientY || touch.pageY;
+          e.preventDefault();
+          sabViewSimData[3] = e.targetTouches.length;
+          for(let i = 0;i < e.targetTouches.length;i++) {
+            const touch = e.targetTouches[i];
+            sabViewSimData[i*2+4] = touch.clientX;
+            sabViewSimData[i*2+4+1] = touch.clientY;
+          }
         });
         window.addEventListener('touchstart', e => {
-          const touch = e.touches[0];
-          sabViewSimData[1] = touch.clientX || touch.pageX;
-          sabViewSimData[2] = touch.clientY || touch.pageY;
-          sabViewSimData[3] = 1;
+          e.preventDefault();
+          sabViewSimData[3] = e.targetTouches.length;
+          for(let i = 0;i < e.targetTouches.length;i++) {
+            const touch = e.targetTouches[i];
+            sabViewSimData[i*2+4] = touch.clientX;
+            sabViewSimData[i*2+4+1] = touch.clientY;
+          }
         });
-        window.addEventListener('touchend', () => {
+        window.addEventListener('touchend', (e) => {
+          e.preventDefault();
           sabViewSimData[3] = 0;
         });
-        window.addEventListener('touchcancel', () => {
+        window.addEventListener('touchcancel', (e) => {
+          e.preventDefault();
           sabViewSimData[3] = 0;
         });
 
@@ -87,15 +128,19 @@
             particleOffsetStart: WORKER_CHUNK_SIZE*i,
             particleOffsetEnd:  WORKER_CHUNK_SIZE*i + WORKER_CHUNK_SIZE,
             particleStride,
+            particleGridA,
+            particleGridB,
           });
         }
 
       //init particles
       for(let i = 0;i < PARTICLE_COUNT;i++) {
-        sabViewParticles[i*particleStride] = Math.random() * canvas.width;
-        sabViewParticles[i*particleStride+1] = Math.random() * canvas.height;
+        sabViewParticles[i*particleStride] = Math.random() * width;
+        sabViewParticles[i*particleStride+1] = Math.random() * height;
         sabViewParticles[i*particleStride+2] = (Math.random()*2-1)*30;
         sabViewParticles[i*particleStride+3] = (Math.random()*2-1)*30;
+        sabViewParticles[i*particleStride+4] = sabViewParticles[i*particleStride];
+        sabViewParticles[i*particleStride+5] = sabViewParticles[i*particleStride+1];
       }
 
       function onWorkerMessage() {
@@ -109,42 +154,35 @@
 
       let lastTime = 1;
       function runSimulation(currentTime) {
-        const dt = Math.min(1, (currentTime - lastTime) / 1000);
+        const dt = Math.min(0.1, (currentTime - lastTime) / 1000);
         lastTime = currentTime;
         sabViewSimData[0] = dt;
         activeWorkers = WORKER_COUNT;
         workerPool.forEach((worker, i) => {
-          worker.postMessage({
-            sabViewPixels: activePixelBuff,
-          });
+          worker.postMessage({});
         });
-        activePixelBuff = activePixelBuff === sabViewPixelsA ? sabViewPixelsB : sabViewPixelsA;
-        render(activePixelBuff);
+        activeParticleGrid = activeParticleGrid === particleGridA ? particleGridB : particleGridA;
+        render(activeParticleGrid);
       }
 
-      function render(pixelBuff) {
+      function render(grid) {
         const width = canvas.width;
         const height = canvas.height;
         const pixels = backbuffer.data;
-
-        for (let i = 0; i < width*height;i++) {
-          let r = 0, g = 0, b = 0;
-          for (let j = 0;j < WORKER_COUNT;j++) {
-            // const offset = j*width*height*3;
-            // r += pixelBuff[offset + i*3];
-            // g += pixelBuff[offset + i*3 + 1];
-            // b += pixelBuff[offset + i*3 + 2];
-            const offset = j*width*height;
-            const col = pixelBuff[offset + i];
-            r += (col >> 16) & 0xFF;
-            g += (col >> 8) & 0xFF;
-            b += col & 0xFF;
-          }
-          pixels[i*4] = r;
-          pixels[i*4+1] = g;
-          pixels[i*4+2] = b;
-          pixels[i*4+3] = 255;
+        pixels.fill(0);
+        for (let i = 0; i < width * height; i++) {
+          const particleCount = grid[i];
+          const y = Math.floor(i / width);
+          const x = i % width;
+          const rx = x / width;
+          const ry = y / height;
+          pixels[i * 4] = (25 + 35 * rx)*particleCount;
+          pixels[i * 4 + 1] = (25 + 35 * ry)*particleCount;
+          pixels[i * 4 + 2] = (25 + 35 * (1-ry))*particleCount;
+          pixels[i * 4 + 3] = 255;
         }
+        grid.fill(0);
+
         context.putImageData(backbuffer, 0, 0);
       }
     </script>
