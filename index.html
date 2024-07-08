@@ -5,18 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Sabby</title>
     <link rel="icon" href="./favicon.ico" type="image/x-icon">
-    <style>
-      body, html, canvas {
-        touch-action: none;
-        -webkit-touch-callout: none;
-        -webkit-user-select: none;
-        -khtml-user-select: none;
-        -moz-user-select: none;
-        -ms-user-select: none;
-        user-select: none;
-        outline: none;
-      }
-    </style>
   </head>
   <body style="margin: 0; width: 100vw; height: 100vh; background: black; pointer-events:none;overflow: hidden;user-select: none;">
         <canvas style="display: block;" id="renderMan" ></canvas>
@@ -34,9 +22,9 @@
         const SIGNAL_RUN = 0;
         const SIGNAL_PAUSE = 1;
         const SIGNAL_READY = 2;
-        const PARTICLE_COUNT = ~~getQueryParam('count') || 1_000_000;
+        const PARTICLE_COUNT = ~~getQueryParam('count') || 2_000_000;
         // const PARTICLE_COUNT = 10_000_000;
-        const CPU_CORES = navigator.hardwareConcurrency;
+        const CPU_CORES = navigator.hardwareConcurrency - 1;
         const chunkSize = Math.floor(PARTICLE_COUNT/CPU_CORES);
         const workerPool = [];
         const stride = 4; // 4 floats x,y,dx,dy;
@@ -45,20 +33,28 @@
         const sabViewParticles = new Float32Array(sabParticles);
         const sabSignals = new SharedArrayBuffer(CPU_CORES);
         const sabViewSignals = new Uint8Array(sabSignals);
-        // dt + mouse x and mouse y
-        const sabSimData = new SharedArrayBuffer(4+4+4+4);
+        // dt + mouse x + mouse y + touch down + screen with + screen height
+        const sabSimData = new SharedArrayBuffer(4+4+4+4+4+4);
         const sabViewSimData = new Float32Array(sabSimData);
         const canvas = document.getElementById('renderMan');
         const context = canvas.getContext('2d');
+        let sabPixelBuffs = new SharedArrayBuffer(CPU_CORES*window.innerWidth*window.innerHeight*3);
+        let sabViewPixelBuffs = new Uint8Array(sabPixelBuffs);
         let backbuffer = new ImageData(window.innerWidth, window.innerHeight);
-
+        window.temp1 = sabViewPixelBuffs;
         // windowing init
         canvas.width = window.innerWidth;
         canvas.height = window.innerHeight;
+        sabViewSimData[4] = canvas.width;
+        sabViewSimData[5] = canvas.height;
         window.addEventListener('resize', () => {
           canvas.width = window.innerWidth;
           canvas.height = window.innerHeight;
+          sabPixelBuffs = new SharedArrayBuffer(CPU_CORES*canvas.width*canvas.height*3);
+          sabViewPixelBuffs = new Uint8Array(sabPixelBuffs);
           backbuffer = new ImageData(canvas.width, canvas.height);
+          sabViewSimData[4] = canvas.width;
+          sabViewSimData[5] = canvas.height;
         });
         window.addEventListener('mousemove', e => {
           sabViewSimData[1] = e.clientX;
@@ -93,7 +89,7 @@
           const worker = new Worker('./worker.js');
           workerPool.push(worker);
           worker.postMessage({
-            sabParticles, sabSignals, id: i, chunkSize, chunkOffset: chunkSize*i, stride, sabSimData
+            sabParticles, sabSignals, id: i, chunkSize, chunkOffset: chunkSize*i, stride, sabSimData, sabPixelBuffs
           });
         }
 
@@ -131,23 +127,19 @@
         const width = canvas.width;
         const height = canvas.height;
         const pixels = backbuffer.data;
-        pixels.fill(0);
-
-        for (let i = 0; i < PARTICLE_COUNT; i++) {
-          const x = sabViewParticles[i * 4];
-          if (x < 0 || x >= width) continue;
-          const y = sabViewParticles[i * 4 + 1];
-          if (y < 0 || y >= height) continue;
-          const pixelIndex = ((y | 0) * width + (x | 0)) * 4;
-          const rx = x / width;
-          const ry = y / height;
-          pixels[pixelIndex] += 25 + (50*rx);   // Red channel
-          pixels[pixelIndex + 1] += 25 +(50*ry); // Green channel
-          pixels[pixelIndex + 2] += 25 +(50*(1-rx)); // Blue channel
-          // pixels[pixelIndex + 2] = 200;
-          pixels[pixelIndex + 3] = 255; // Alpha channel (opacity)
+        const pixStride = width*height*3;
+        for (let i = 0; i < width*height;i++) {
+          let r = 0, g = 0, b = 0;
+          for (let j = 0;j < CPU_CORES;j++) {
+            r += sabViewPixelBuffs[j*pixStride + i*3];
+            g += sabViewPixelBuffs[j*pixStride + i*3 + 1];
+            b += sabViewPixelBuffs[j*pixStride + i*3 + 2];
+          }
+          pixels[i*4] = r;
+          pixels[i*4+1] = g;
+          pixels[i*4+2] = b;
+          pixels[i*4+3] = 255;
         }
-
         context.putImageData(backbuffer, 0, 0);
       }
     </script>

@@ -8,28 +8,39 @@ onmessage = (event) => {
   const {
     sabParticles,
     sabSignals,
+    sabSimData,
+    sabPixelBuffs,
     id,
     chunkSize,
     chunkOffset,
     stride,
-    sabSimData,
   } = event.data;
   const particlesView = new Float32Array(sabParticles);
   const signalsView = new Uint8Array(sabSignals);
   const simDataView = new Float32Array(sabSimData);
+  const pixelBuffs = new Uint8Array(sabPixelBuffs);
   const dt = () => simDataView[0];
-  const input = () => [simDataView[1], simDataView[2], !!simDataView[3]];
+  const input = () => [
+    simDataView[1],
+    simDataView[2],
+    !!simDataView[3],
+    simDataView[4],
+    simDataView[5],
+  ];
   signalsView[id] = SIGNAL_READY;
   console.log(`worker init ${id}`);
 
   setInterval(() => {
     if (signalsView[id] !== SIGNAL_RUN) return;
     const delta = dt();
-    const [mx, my, isTouch] = input();
-    for (let i = chunkOffset; i <= chunkOffset + chunkSize; i++) {
+    const [mx, my, isTouch, width, height] = input();
+    const buffStride = width * height * 3;
+
+    pixelBuffs.fill(0, buffStride * id, buffStride * id + width * height * 3);
+    for (let i = chunkOffset; i < chunkOffset + chunkSize; i++) {
       const decay = 1 / (1 + delta * 1);
-      const x = particlesView[i * stride];
-      const y = particlesView[i * stride + 1];
+      let x = particlesView[i * stride];
+      let y = particlesView[i * stride + 1];
       let dx = particlesView[i * stride + 2] * decay;
       let dy = particlesView[i * stride + 3] * decay;
 
@@ -43,10 +54,21 @@ onmessage = (event) => {
         dx += dirX * force * delta;
         dy += dirY * force * delta;
       }
-      particlesView[i * stride] = x + dx * delta;
-      particlesView[i * stride + 1] = y + dy * delta;
+      x += dx * delta;
+      y += dy * delta;
+      particlesView[i * stride] = x;
+      particlesView[i * stride + 1] = y;
       particlesView[i * stride + 2] = dx;
       particlesView[i * stride + 3] = dy;
+
+      if (x < 0 || x >= width) continue;
+      if (y < 0 || y >= height) continue;
+      const pixelIndex = ((y | 0) * width + (x | 0)) * 3;
+      const rx = x / width;
+      const ry = y / height;
+      pixelBuffs[buffStride * id + pixelIndex] += 25 + 50 * rx;
+      pixelBuffs[buffStride * id + pixelIndex + 1] += 25 + 50 * ry;
+      pixelBuffs[buffStride * id + pixelIndex + 2] += 25 + 50 * (1 - rx);
     }
     signalsView[id] = SIGNAL_READY;
   }, 1);
